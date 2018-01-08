@@ -1,6 +1,6 @@
 import {MsgSafeKeyboardEvent, MsgSafeNode} from './msgsafe'
 import {isTextEditable} from './dom'
-import {isSimpleKey} from './keyseq'
+import {isSimpleKey,keyeventToKey} from './keyseq'
 import state from "./state"
 import {repeat} from './excmds_background'
 import Logger from "./logging"
@@ -33,7 +33,7 @@ function *ParserController () {
         try {
             while (true) { 
                 let keyevent: MsgSafeKeyboardEvent = yield
-                let keypress = keyevent.key
+                let keypress = keyeventToKey(keyevent).toString()
 
                 // TODO: think about if this is robust
                 if (state.mode != "ignore" && state.mode != "hint" && state.mode != "input") {

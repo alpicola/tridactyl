@@ -43,6 +43,29 @@ export class MinimalKey {
         }
         return true
     }
+
+    /* Returns a literal or normalized bracket expr */
+    toString() {
+        let modifiers: string[] = []
+        if (this.metaKey) {
+            modifiers.push('M')
+        }
+        if (this.altKey) {
+            modifiers.push('A')
+        }
+        if (this.ctrlKey) {
+            modifiers.push('C')
+        }
+        if (this.key.length > 1 && this.shiftKey) {
+            modifiers.push('S')
+        }
+
+        if (this.key.length > 1 || modifiers.length > 0 || this.key == '<' || this.key == '>') {
+            return '<' + [...modifiers, this.key].join('-') + '>'
+        } else {
+            return this.key
+        }
+    }
 }
 
 /** String starting with a bracket expr or a literal < to MinimalKey and remainder.
@@ -187,5 +210,9 @@ export function hasNonShiftModifiers(keyEvent: KeyEventLike) {
 }
 
 export function isSimpleKey(keyEvent: KeyEventLike) {
-    return ! (keyEvent.key.length > 1 || hasNonShiftModifiers(keyEvent))
+    return ! (keyEvent.key.length > 1)
+}
+
+export function keyeventToKey(keyevent: KeyEventLike): MinimalKey {
+    return new MinimalKey(keyevent.key, keyevent)
 }

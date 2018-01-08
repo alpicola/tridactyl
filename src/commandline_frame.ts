@@ -42,7 +42,9 @@ function enableCompletions() {
         activeCompletions = [
             new Completions.BufferCompletionSource(completionsDiv),
             new Completions.HistoryCompletionSource(completionsDiv),
-            new Completions.BmarkCompletionSource(completionsDiv),
+            // BmarkCompletionSource yields open excmd, that does not coincide with its prefix.
+            // BmarkCompletion is not compatible with immediate completion, so disable it for now.
+            // new Completions.BmarkCompletionSource(completionsDiv),
         ]
 
         const fragment = document.createDocumentFragment()
@@ -51,6 +53,26 @@ function enableCompletions() {
     }
 }
 /* document.addEventListener("DOMContentLoaded", enableCompletions) */
+
+function nextCompletion() {
+    for (const comp of activeCompletions) {
+        if (comp.state === 'normal') {
+            comp.next()
+            clInput.value = comp.completion
+            break
+        }
+    }
+}
+
+function prevCompletion() {
+    for (const comp of activeCompletions) {
+        if (comp.state === 'normal') {
+            comp.prev()
+            clInput.value = comp.completion
+            break
+        }
+    }
+}
 
 let noblur = e =>  setTimeout(() => clInput.focus(), 0)
 
@@ -125,15 +147,10 @@ clInput.addEventListener("keydown", function (keyevent) {
             // Stop tab from losing focus
             keyevent.preventDefault()
             keyevent.stopPropagation()
-            if (keyevent.shiftKey){
-                activeCompletions.forEach(comp =>
-                    comp.prev()
-                )
+            if (keyevent.shiftKey) {
+                prevCompletion()
             } else {
-                activeCompletions.forEach(comp =>
-                    comp.next()
-                )
-
+                nextCompletion()
             }
             // tabcomplete()
             break
@@ -199,7 +216,7 @@ function history(n){
 
 /* Send the commandline to the background script and await response. */
 function process() {
-    const command = getCompletion() || clInput.value
+    const command = clInput.value
 
     hide_and_clear()
 

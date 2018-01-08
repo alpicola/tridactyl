@@ -131,6 +131,7 @@ clInput.addEventListener("keydown", function (keyevent) {
         // Todo: hard mode: vi style editing on cli, like set -o mode vi
         // should probably just defer to another library
         case "c":
+        case "[":
             if (keyevent.ctrlKey) hide_and_clear()
             break
 
@@ -141,6 +142,13 @@ clInput.addEventListener("keydown", function (keyevent) {
                 keyevent.stopPropagation()
                 tabcomplete()
             }
+            break
+
+        case "n":
+            if (keyevent.ctrlKey) nextCompletion()
+            break
+        case "p":
+            if (keyevent.ctrlKey) prevCompletion()
             break
 
         case "Tab":

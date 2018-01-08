@@ -7,6 +7,10 @@ export function parser(keys){
         if (keys[0].key === 'Escape') {
             return {keys: [], ex_str: 'unfocus'}
         }
+    } else if (keys[0].ctrlKey) {
+        if (keys[0].key === '[') {
+            return {keys: [], ex_str: 'unfocus'}
+        }
     }
     return {keys: [], ex_str: undefined}
 }

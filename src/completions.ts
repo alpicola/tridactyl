@@ -334,8 +334,8 @@ class HistoryCompletionOption extends CompletionOptionHTML implements Completion
         this.html = html`<tr class="HistoryCompletionOption option">
             <td class="prefix">${"".padEnd(2)}</td>
             <td></td>
-            <td>${page.title}</td>
             <td><a class="url" target="_blank" href=${page.url}>${page.url}</a></td>
+            <td>${page.title}</td>
         </tr>`
     }
 }

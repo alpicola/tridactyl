@@ -210,7 +210,7 @@ export function hasNonShiftModifiers(keyEvent: KeyEventLike) {
 }
 
 export function isSimpleKey(keyEvent: KeyEventLike) {
-    return ! (keyEvent.key.length > 1)
+    return ! (keyEvent.key.length > 1 || keyEvent.altKey || keyEvent.metaKey)
 }
 
 export function keyeventToKey(keyevent: KeyEventLike): MinimalKey {

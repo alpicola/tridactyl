@@ -17,33 +17,31 @@ const logger = new Logger('messaging')
 let cmdline_iframe: HTMLIFrameElement = undefined
 
 function init(){
-    if (cmdline_iframe === undefined && window.document.body !== null) {
+    if (cmdline_iframe === undefined) {
         try {
             cmdline_iframe = window.document.createElement("iframe")
+            cmdline_iframe.className = "cleanslate"
             cmdline_iframe.setAttribute("src", browser.extension.getURL("static/commandline.html"))
             cmdline_iframe.setAttribute("id", "cmdline_iframe")
             hide()
-            window.document.body.appendChild(cmdline_iframe)
+            window.document.documentElement.appendChild(cmdline_iframe)
         } catch (e) {
             logger.error("Couldn't initialise cmdline_iframe!", e)
         }
     }
 }
-
 // TODO: Propagate awaits back through messaging system or resend
 // commandline_frame messages from excmd_content if you want to avoid init'ing
 // every time.
-document.addEventListener("DOMContentLoaded", init)
-// This second call will fail in the most common case, but makes web-ext reloads effective.
 init()
 
 export function show(){
     const height = cmdline_iframe.contentWindow.document.body.offsetHeight + 'px'
-    cmdline_iframe.setAttribute("style", `height: ${height};`)
+    cmdline_iframe.setAttribute("style", `height: ${height} !important;`)
 }
 
 export function hide(){
-    cmdline_iframe.setAttribute("style", "height: 0px;")
+    cmdline_iframe.setAttribute("style", "height: 0px !important;")
 }
 
 export function focus(){

@@ -4,10 +4,13 @@
 
     Use `:help <excmd>` or scroll down to show [[help]] for a particular excmd.
 
-    The default keybinds can be found [here](/static/docs/modules/_config_.html#defaults)
+    The default keybinds can be found [here](/static/docs/modules/_config_.html#defaults).
+    You can also view them with [[bind]]. Try `bind j`.
+
+    For more information, and FAQs, check out our [readme][4] on github.
 
     Tridactyl is in a pretty early stage of development. Please report any
-    issues and make requests for missing features on the GitHub [project page](1).
+    issues and make requests for missing features on the GitHub [project page][1].
     You can also get in touch using Matrix, Gitter, or IRC chat clients:
 
     [![Matrix Chat][matrix-badge]][matrix-link]
@@ -47,11 +50,12 @@
       file](2) available in our repository.
 
     If you want a more fully-featured vimperator-alike, your best option is
-    [Firefox ESR](3) and Vimperator :)
+    [Firefox ESR][3] and Vimperator :)
 
     [1]: https://github.com/cmcaine/tridactyl/issues
     [2]: https://github.com/cmcaine/tridactyl/blob/master/src/static/userChrome-minimal.css
     [3]: https://www.mozilla.org/en-US/firefox/organizations/
+    [4]: https://github.com/cmcaine/tridactyl#readme
 
     [gitter-badge]: /static/badges/gitter-badge.svg
     [gitter-link]: https://gitter.im/tridactyl/Lobby
@@ -64,49 +68,38 @@
 
 // {{{ setup
 
+// Shared
 import * as Messaging from "./messaging"
 import {l} from './lib/webext'
 import state from "./state"
-
-//#content_omit_line
-import "./number.clamp"
-//#content_helper
-import * as SELF from "./excmds_content"
-//#content_helper
-Messaging.addListener('excmd_content', Messaging.attributeCaller(SELF))
-/** Message excmds_content.ts in the active tab of the currentWindow */
-//#background_helper
-import {messageActiveTab} from './messaging'
-
-//#background_helper
-import "./number.mod"
-//#background_helper
-import {ModeName} from './state'
-//#background_helper
-import * as keydown from "./keydown_background"
-//#background_helper
-import {activeTab, activeTabId, firefoxVersionAtLeast} from './lib/webext'
-//#content_helper
-import {incrementUrl, getUrlRoot, getUrlParent} from "./url_util"
-//#background_helper
-import * as CommandLineBackground from './commandline_background'
-//#content_helper
-import * as DOM from './dom'
-
+import * as UrlUtil from "./url_util"
 import * as config from './config'
+import * as aliases from './aliases'
 import * as Logging from "./logging"
 const logger = new Logging.Logger('excmds')
 
+//#content_helper
+// {
+import "./number.clamp"
+import * as SELF from "./excmds_content"
+Messaging.addListener('excmd_content', Messaging.attributeCaller(SELF))
+import * as DOM from './dom'
+// }
+
+//#background_helper
+// {
+/** Message excmds_content.ts in the active tab of the currentWindow */
+import {messageActiveTab} from './messaging'
+
+import "./number.mod"
+import {ModeName} from './state'
+import * as keydown from "./keydown_background"
+import {activeTab, activeTabId, firefoxVersionAtLeast, openInNewTab} from './lib/webext'
+import * as CommandLineBackground from './commandline_background'
 
 /** @hidden */
-//#background_helper
 export const cmd_params = new Map<string, Map<string, string>>()
-
-// map a page-relation (next or previous) to a fallback pattern to match link texts against
-const REL_PATTERN = {
-    next: /^(?:next|newer)\b|»|>>/i,
-    prev: /^(?:prev(?:ious)?|older)\b|«|<</i,
-}
+// }
 
 /** @hidden */
 function hasScheme(uri: string) {
@@ -121,17 +114,12 @@ function searchURL(provider: string, query: string) {
         throw new TypeError(`Unknown provider: '${provider}'`)
     }
 
-    // build search URL: either replace "%s" in URL with query or append query to URL
-    const url = searchurlprovider.includes("%s") ?
-        new URL(searchurlprovider.replace("%s", encodeURIComponent(query))) :
-        new URL(searchurlprovider + encodeURIComponent(query))
-
-    return url
+    return UrlUtil.interpolateSearchItem(new URL(searchurlprovider), query)
 }
 
 /** If maybeURI doesn't have a schema, affix http:// */
 /** @hidden */
-function forceURI(maybeURI: string): string {
+export function forceURI(maybeURI: string): string {
     // Need undefined to be able to open about:newtab
     if (maybeURI == "") return undefined
     try {
@@ -193,9 +181,12 @@ export function loggingsetlevel(logModule: string, level: string) {
     let newLevel = map[level.toLowerCase()]
 
     if (newLevel !== undefined) {
-        config.set("logging", newLevel, logModule)
+        config.set("logging", logModule, newLevel)
+    } else {
+        throw "Bad log level!"
     }
 }
+
 
 // }}}
 
@@ -271,7 +262,7 @@ export async function reload(n = 1, hard = false) {
 /** Reloads all tabs, bypassing the cache if hard is set to true */
 //#background
 export async function reloadall(hard = false){
-    let tabs = await browser.tabs.query({})
+    let tabs = await browser.tabs.query({currentWindow: true})
     let reloadprops = {bypassCache: hard}
     tabs.map(tab => browser.tabs.reload(tab.id, reloadprops))
 }
@@ -296,9 +287,10 @@ export async function reloadhard(n = 1) {
 //#content
 export function open(...urlarr: string[]) {
     let url = urlarr.join(" ")
+    if (url === "")
+        url = config.get("newtab") || browser.extension.getURL("static/newtab.html")
     window.location.href = forceURI(url)
 }
-
 
 /** Go to your homepage(s)
 
@@ -339,25 +331,23 @@ export async function help(excmd?: string) {
 // Find clickable next-page/previous-page links whose text matches the supplied pattern,
 // and return the last such link.
 //
-// If no matching link is found, return null.
+// If no matching link is found, return undefined.
 //
 // We return the last link that matches because next/prev buttons tend to be at the end of the page
 // whereas lots of blogs have "VIEW MORE" etc. plastered all over their pages.
+//#content_helper
 function findRelLink(pattern: RegExp): HTMLAnchorElement | null {
-    const links = <NodeListOf<HTMLAnchorElement>>document.querySelectorAll('a[href]')
+    // querySelectorAll returns a "non-live NodeList" which is just a shit array without working reverse() or find() calls, so convert it.
+    const links = Array.from(
+        <NodeListOf<HTMLAnchorElement>>document.querySelectorAll('a[href]'))
 
-    let lastLink = null
+    // Find the last link that matches the test
+    return links.reverse().find(link => pattern.test(link.innerText))
 
-    for (const link of links) {
-        // `innerText` gives better (i.e. less surprising) results than `textContent`
-        // at the expense of being much slower, but that shouldn't be an issue here
-        // as it's a one-off operation that's only performed when we're leaving a page
-        if (pattern.test(link.innerText)) {
-            lastLink = link
-        }
-    }
-
-    return lastLink
+    // Note:
+    // `innerText` gives better (i.e. less surprising) results than `textContent`
+    // at the expense of being much slower, but that shouldn't be an issue here
+    // as it's a one-off operation that's only performed when we're leaving a page
 }
 
 /** @hidden */
@@ -369,9 +359,21 @@ function selectLast(selector: string): HTMLElement | null {
 }
 
 /** Find a likely next/previous link and follow it
- *
- * @param rel   the relation of the target page to the current page: "next" or "prev"
- */
+
+    If a link or anchor element with rel=rel exists, use that, otherwise fall back to:
+    
+        1) find the last anchor on the page with innerText matching the appropriate `followpagepattern`.
+        2) call [[urlincrement]] with 1 or -1
+
+    If you want to support e.g. French:
+
+    ```
+    set followpagepatterns.next ^(next|newer|prochain)\b|»|>>
+    set followpagepatterns.prev ^(prev(ious)?|older|précédent)\b|»|>>
+    ```
+
+    @param rel   the relation of the target page to the current page: "next" or "prev"
+*/
 //#content
 export function followpage(rel: 'next'|'prev' = 'next') {
     const link = <HTMLLinkElement>selectLast(`link[rel~=${rel}][href]`)
@@ -382,10 +384,12 @@ export function followpage(rel: 'next'|'prev' = 'next') {
     }
 
     const anchor = <HTMLAnchorElement>selectLast(`a[rel~=${rel}][href]`) ||
-        findRelLink(REL_PATTERN[rel])
+        findRelLink(new RegExp(config.get("followpagepatterns", rel), "i"))
 
     if (anchor) {
-        anchor.click()
+        DOM.mouseEvent(anchor, "click")
+    } else {
+        urlincrement(rel === "next" ? 1 : -1)
     }
 }
 
@@ -395,7 +399,7 @@ export function followpage(rel: 'next'|'prev' = 'next') {
 */
 //#content
 export function urlincrement(count = 1){
-    let newUrl = incrementUrl(window.location.href, count)
+    let newUrl = UrlUtil.incrementUrl(window.location.href, count)
 
     if (newUrl !== null) {
         window.location.href = newUrl
@@ -406,7 +410,7 @@ export function urlincrement(count = 1){
  */
 //#content
 export function urlroot (){
-    let rootUrl = getUrlRoot(window.location)
+    let rootUrl = UrlUtil.getUrlRoot(window.location)
 
     if (rootUrl !== null) {
         window.location.href = rootUrl.href
@@ -417,10 +421,143 @@ export function urlroot (){
  */
 //#content
 export function urlparent (count = 1){
-    let parentUrl = getUrlParent(window.location, count)
+    let parentUrl = UrlUtil.getUrlParent(window.location, count)
 
     if (parentUrl !== null) {
         window.location.href = parentUrl.href
+    }
+}
+
+/**
+ * Open a URL made by modifying the current URL
+ *
+ * There are several modes:
+ *
+ * * Text replace mode:   `urlmodify -t <old> <new>`
+ *
+ *   Replaces the first instance of the text `old` with `new`.
+ *      * `http://example.com` -> (`-t exa peta`) -> `http://petample.com`
+ *
+ * * Regex replacment mode: `urlmodify -r <regexp> <new> [flags]`
+ *
+ *   Replaces the first match of the `regexp` with `new`. You can use
+ *   flags `i` and `g` to match case-insensitively and to match
+ *   all instances respectively
+ *      * `http://example.com` -> (`-r [ea] X g`) -> `http://XxXmplX.com`
+ *
+ * * Query replace mode: `urlmodify -q <query> <new_val>`
+ *
+ *   Replace the value of a query with a new one:
+ *      * `http://e.com?id=foo` -> (`-q id bar`) -> `http://e.com?id=bar
+ *
+ * * Query delete mode: `urlmodify -Q <query>`
+ *
+ *   Deletes the given query (and the value if any):
+ *      * `http://e.com?id=foo&page=1` -> (`-Q id`) -> `http://e.com?page=1`
+ *
+ * * Graft mode: `urlmodify -g <graft_point> <new_path_tail>`
+ *
+ *   "Grafts" a new tail on the URL path, possibly removing some of the old
+ *   tail. Graft point indicates where the old URL is truncated before adding
+ *   the new path.
+ *
+ *   * `graft_point` >= 0 counts path levels, starting from the left
+ *   (beginning). 0 will append from the "root", and no existing path will
+ *   remain, 1 will keep one path level, and so on.
+ *   * `graft_point` < 0 counts from the right (i.e. the end of the current
+ *   path). -1 will append to the existing path, -2 will remove the last path
+ *   level, and so on.
+ *
+ *   ```text
+ *   http://website.com/this/is/the/path/component
+ *   Graft point:       ^    ^  ^   ^    ^        ^
+ *   From left:         0    1  2   3    4        5
+ *   From right:       -6   -5 -4  -3   -2       -1
+ *   ```
+ *
+ *   Examples:
+ *
+ *   * `http://e.com/issues/42` -> (`-g 0 foo`) -> `http://e.com/foo`
+ *   * `http://e.com/issues/42` -> (`-g 1 foo`) -> `http://e.com/issues/foo`
+ *   * `http://e.com/issues/42` -> (`-g -1 foo`) -> `http://e.com/issues/42/foo`
+ *   * `http://e.com/issues/42` -> (`-g -2 foo`) -> `http://e.com/issues/foo`
+ *
+ * @param mode      The replace mode:
+ *  * -t text replace
+ *  * -r regexp replace
+ *  * -q replace the value of the given query
+ *  * -Q delete the given query
+ *  * -g graft a new path onto URL or parent path of it
+ * @param replacement the replacement arguments (depends on mode):
+ *  * -t <old> <new>
+ *  * -r <regexp> <new> [flags]
+ *  * -q <query> <new_val>
+ *  * -Q <query>
+ *  * -g <graftPoint> <newPathTail>
+ */
+//#content
+export function urlmodify(mode: "-t" | "-r" | "-q" | "-Q" | "-g", ...args: string[]) {
+
+    let oldUrl = new URL(window.location.href)
+    let newUrl = undefined
+
+    switch(mode) {
+
+        case "-t":
+            if (args.length !== 2) {
+                throw new Error("Text replacement needs 2 arguments:"
+                    + "<old> <new>")
+            }
+
+            newUrl = oldUrl.href.replace(args[0], args[1])
+            break
+
+        case "-r":
+            if (args.length < 2 || args.length > 3) {
+                throw new Error("RegExp replacement takes 2 or 3 arguments: "
+                    + "<regexp> <new> [flags]")
+            }
+
+            if (args[2] && args[2].search(/^[gi]+$/) === -1)
+            {
+                throw new Error("RegExp replacement flags can only include 'g', 'i'"
+                    + ", Got '" + args[2] + "'")
+            }
+
+            let regexp = new RegExp(args[0], args[2])
+            newUrl = oldUrl.href.replace(regexp, args[1])
+            break
+
+        case "-q":
+            if (args.length !== 2) {
+                throw new Error("Query replacement needs 2 arguments:"
+                    + "<query> <new_val>")
+            }
+
+            newUrl = UrlUtil.replaceQueryValue(oldUrl, args[0],
+                args[1])
+            break
+        case "-Q":
+            if (args.length !== 1) {
+                throw new Error("Query deletion needs 1 argument:"
+                    + "<query>")
+            }
+
+            newUrl = UrlUtil.deleteQuery(oldUrl, args[0])
+            break
+
+        case "-g":
+            if (args.length !== 2) {
+                throw new Error("URL path grafting needs 2 arguments:"
+                    + "<graft point> <new path tail>")
+            }
+
+            newUrl = UrlUtil.graftUrlPath(oldUrl, args[1], Number(args[0]))
+            break
+    }
+
+    if (newUrl && newUrl !== oldUrl) {
+        window.location.href = newUrl
     }
 }
 
@@ -454,6 +591,26 @@ export async function reader() {
     } // else {
     //  // once a statusbar exists an error can be displayed there
     // }
+    }
+}
+
+//@hidden
+//#content_helper
+loadaucmds()
+
+//@hidden
+//#content
+export async function loadaucmds(){
+    console.log("AUCMDS TRIED TO RUN")
+    // for some reason, this never changes from the default, even when there is user config (e.g. set via `aucmd bbc.co.uk mode ignore`)
+    let aucmds = await config.getAsync("autocmds", "DocStart")
+    console.log(aucmds)
+    const ausites = Object.keys(aucmds)
+    // yes, this is lazy
+    const aukey = ausites.find(e=>window.document.location.href.includes(e))
+    if (aukey !== undefined){
+        console.log(aukey)
+        Messaging.message("commandline_background", "recvExStr", [aucmds[aukey]])
     }
 }
 
@@ -577,7 +734,7 @@ export function focusinput(nth: number|string) {
 
     if (inputToFocus) {
         inputToFocus.focus()
-        if (config.get('vimium-gi') && state.mode !== 'input') {
+        if (config.get('gimode') === 'nextinput' && state.mode !== 'input') {
             state.mode = 'input'
         }
     }
@@ -652,14 +809,30 @@ export async function tablast() {
     tabIndexSetActive(0)
 }
 
-/** Like [[open]], but in a new tab. If no address is given, it will open the newtab page, which can be set with `set newtab [url]` */
+/** Like [[open]], but in a new tab. If no address is given, it will open the newtab page, which can be set with `set newtab [url]`
+
+    Unlike Firefox's Ctrl-t shortcut, this opens tabs immediately after the
+    currently active tab rather than at the end of the tab list because that is
+    the author's preference.
+
+    If you would rather the Firefox behaviour `set tabopenpos last`. This
+    preference also affects the clipboard, quickmarks, home, help, etc.
+
+    If you would rather the URL be opened as if you'd middle clicked it, `set
+    tabopenpos related`.
+
+    Hinting is controlled by `relatedopenlast`
+
+*/
 //#background
 export async function tabopen(...addressarr: string[]) {
-    let uri
+    let url: string
     let address = addressarr.join(' ')
-    if (address != "") uri = forceURI(address)
-    else uri = forceURI(config.get("newtab"))
-    browser.tabs.create({url: uri})
+
+    if (address != "") url = forceURI(address)
+    else url = forceURI(config.get("newtab"))
+
+    openInNewTab(url)
 }
 
 /** Resolve a tab index to the tab id of the corresponding tab in this window.
@@ -855,9 +1028,7 @@ export function suppress(preventDefault?: boolean, stopPropagation?: boolean) {
 
 //#background
 export function version(){
-    clipboard("yank","REPLACE_ME_WITH_THE_VERSION_USING_SED")
     fillcmdline_notrail("REPLACE_ME_WITH_THE_VERSION_USING_SED")
-
 }
 
 /** Example:
@@ -946,7 +1117,7 @@ export function composite(...cmds: string[]) {
 
 /** Please use fillcmdline instead */
 //#background
-export function showcmdline() {
+function showcmdline() {
     CommandLineBackground.show()
 }
 
@@ -1079,7 +1250,54 @@ export async function buffer(index: number | '#') {
 
 // {{{ SETTINGS
 
-/** Bind a sequence of keys to an excmd.
+/**
+ * Similar to vim's `:command`. Maps one ex-mode command to another.
+ * If command already exists, this will override it, and any new commands
+ * added in a future release will be SILENTLY overridden. Aliases are
+ * expanded recursively.
+ *
+ * Examples:
+ *  - `command t tabopen`
+ *  - `command tn tabnext_gt`
+ *  = `command hello t` This will expand recursively into 'hello'->'tabopen'
+ *
+ * Note that this is only for excmd->excmd mappings. To map a normal-mode
+ * command to an excommand, see [[bind]].
+ *
+ * See also:
+ *  - [[comclear]]
+ */
+//#background
+export function command(name: string, ...definition: string[]) {
+    // Test if alias creates an alias loop.
+    try {
+        const def = definition.join(" ")
+        // Set alias
+        config.set("exaliases", name, def)
+        aliases.expandExstr(name)
+    } catch(e) {
+        // Warn user about infinite loops
+        fillcmdline_notrail(e, ' Alias unset.')
+        config.unset("exaliases", name)
+    }
+}
+
+/**
+ * Similar to vim's `comclear` command. Clears an excmd alias defined by
+ * `command`.
+ *
+ * For example: `comclear helloworld` will reverse any changes caused
+ * by `command helloworld xxx`
+ *
+ * See also:
+ *  - [[command]]
+ */
+//#background
+export function comclear(name: string) {
+    config.unset("exaliases", name)
+}
+
+/** Bind a sequence of keys to an excmd or view bound sequence.
 
     This is an easier-to-implement bodge while we work on vim-style maps.
 
@@ -1089,6 +1307,11 @@ export async function buffer(index: number | '#') {
         - `bind D composite tabclose | buffer #`
         - `bind j scrollline 20`
         - `bind F hint -b`
+
+    You can view binds by omitting the command line:
+
+        - `bind j`
+        - `bind k`
 
     Use [[composite]] if you want to execute multiple excmds. Use
     [[fillcmdline]] to put a string in the cmdline and focus the cmdline
@@ -1101,14 +1324,90 @@ export async function buffer(index: number | '#') {
 */
 //#background
 export function bind(key: string, ...bindarr: string[]){
-    let exstring = bindarr.join(" ")
-    config.set("nmaps",exstring,key)
+    if (bindarr.length) {
+        let exstring = bindarr.join(" ")
+        config.set("nmaps", key, exstring)
+    } else if (key.length) {
+        // Display the existing bind
+        fillcmdline_notrail("#", key, "=", config.get("nmaps", key))
+    }
 }
 
-/** Set a search engine keyword for use with *open or `set searchengine` */
+/**
+ * Set a search engine keyword for use with *open or `set searchengine`
+ *
+ * @deprecated use `set searchurls.KEYWORD URL` instead
+ *
+ * @param keyword   the keyword to use for this search (e.g. 'esa')
+ * @param url       the URL to interpolate the query into. If %s is found in
+ *                  the URL, the query is inserted there, else it is appended.
+ *                  If the insertion point is in the "query string" of the URL,
+ *                  the query is percent-encoded, else it is verbatim.
+ **/
 //#background
 export function searchsetkeyword(keyword: string, url: string){
-    config.set("searchurls",forceURI(url),keyword)
+    config.set("searchurls", keyword, forceURI(url))
+}
+
+/** Set a key value pair in config.
+
+    Use to set any string values found [here](/static/docs/modules/_config_.html#defaults)
+
+    e.g.
+        set searchurls.google https://www.google.com/search?q=
+        set logging.messaging info
+*/
+//#background
+export function set(key: string, ...values: string[]) {
+    if (! key || ! values[0]) {
+        throw "Both key and value must be provided!"
+    }
+
+    const target = key.split('.')
+
+    // Special case conversions
+    // TODO: Should we do any special case shit here?
+    switch (target[0]) {
+        case "logging":
+            const map = {
+                "never": Logging.LEVEL.NEVER,
+                "error": Logging.LEVEL.ERROR,
+                "warning": Logging.LEVEL.WARNING,
+                "info": Logging.LEVEL.INFO,
+                "debug": Logging.LEVEL.DEBUG,
+            }
+            let level = map[values[0].toLowerCase()]
+            if (level === undefined) throw "Bad log level!"
+            else config.set(...target, level)
+            return
+    }
+
+    const currentValue = config.get(...target)
+
+    if (Array.isArray(currentValue)) {
+        config.set(...target, values)
+    } else if (currentValue === undefined || typeof currentValue === "string") {
+        config.set(...target, values.join(' '))
+    } else {
+        throw "Unsupported setting type!"
+    }
+}
+
+/** Set autocmds to run when certain events happen.
+
+ @param event Curently, only 'DocStart' is supported.
+
+ @param url The URL on which the events will trigger (currently just uses "contains")
+
+ @param excmd The excmd to run (use [[composite]] to run multiple commands)
+
+*/
+//#background
+export function autocmd(event: string, url: string, ...excmd: string[]){
+    // rudimentary run time type checking
+    // TODO: Decide on autocmd event names
+    if(!['DocStart'].includes(event)) throw (event + " is not a supported event.")
+    config.set("autocmds", event, url, excmd.join(" "))
 }
 
 /** Unbind a sequence of keys so that they do nothing at all.
@@ -1120,7 +1419,7 @@ export function searchsetkeyword(keyword: string, url: string){
 */
 //#background
 export async function unbind(key: string){
-    bind(key, "")
+    config.set("nmaps", key, "")
 }
 
 /** Restores a sequence of keys to their default value.
@@ -1264,35 +1563,29 @@ export async function quickmark(key: string, ...addressarr: string[]) {
     }
 }
 
-//#background
-export function get(target: string, property?: string){
-    console.log(config.get(target,property))
-}
+/** Puts the contents of config value with keys `keys` into the commandline and the background page console
 
-/** Set a setting to a value
+    It's a bit rubbish, but we don't have a good way to provide feedback to the commandline yet.
 
-    Currently, this only supports string settings without any whitespace
-    (i.e. not nmaps.)
-
-    It can be used on any string <-> string settings found [here](/static/docs/modules/_config_.html#defaults)
-
+    You can view the log entry in the browser console (Ctrl-Shift-j).
 */
 //#background
-export function set(setting: string, ...value: string[]){
-    // We only support setting strings or arrays: not objects
-    let current = config.get(setting)
-    if ((Array.isArray(current) || typeof current == "string")) {
-        if (value.length > 0){
-            if (!Array.isArray(current)){
-                config.set(setting,value[0])
-            } else config.set(setting,value)
-        } else fillcmdline_notrail("set " + setting + " " + config.get(setting))
+export function get(...keys: string[]) {
+    const target = keys.join('.').split('.')
+    const value = config.get(...target)
+    console.log(value)
+    if (typeof value === "object") {
+        fillcmdline_notrail(`# ${keys.join('.')} = ${JSON.stringify(value)}`)
+    } else {
+        fillcmdline_notrail(`# ${keys.join('.')} = ${value}`)
     }
 }
 
 //#background
-export function unset(target: string, property?: string){
-    config.unset(target,property)
+export function unset(...keys: string[]){
+    const target = keys.join('.').split('.')
+    if(target === undefined) throw("You must define a target!")
+    config.unset(...target)
 }
 
 // not required as we automatically save all config
@@ -1332,6 +1625,8 @@ import * as hinting from './hinting_background'
         - -# yank an element's anchor URL to clipboard
         - -c [selector] hint links that match the css selector
           - `bind ;c hint -c [class*="expand"],[class="togg"]` works particularly well on reddit and HN
+        - -w open in new window
+            -wp open in new private window
 
     Excepting the custom selector mode and background hint mode, each of these
     hint modes is available by default as `;<option character>`, so e.g. `;y`
@@ -1341,6 +1636,8 @@ import * as hinting from './hinting_background'
 
     Related settings:
         "hintchars": "hjklasdfgyuiopqwertnmzxcvb"
+        "hintfiltermode": "simple" | "vimperator" | "vimperator-reflow"
+        "relatedopenpos": "related" | "next" | "last"
 */
 //#background
 export function hint(option?: string, selectors="") {
@@ -1358,6 +1655,8 @@ export function hint(option?: string, selectors="") {
     else if (option === "-#") hinting.hintPageAnchorYank()
     else if (option === "-c") hinting.hintPageSimple(selectors)
     else if (option === "-r") hinting.hintRead()
+    else if (option === "-w") hinting.hintPageWindow()
+    else if (option === "-wp") hinting.hintPageWindowPrivate()
     else hinting.hintPageSimple()
 }
 
@@ -1437,7 +1736,7 @@ export async function ttsvoices() {
     let voices = TTS.listVoices()
 
     // need a better way to show this to the user
-    fillcmdline_notrail(voices.sort().join(", "))
+    fillcmdline_notrail("#", voices.sort().join(", "))
 }
 
 /**

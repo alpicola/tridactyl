@@ -206,3 +206,171 @@ export function getDownloadFilenameForUrl(url: URL): string {
     // default is just "download"
     return url.hostname || "download"
 }
+
+/**
+ * Get an Array of the queries in a URL.
+ *
+ * These could be like "query" or "query=val"
+ */
+function getUrlQueries(url: URL): Array<string> {
+
+    let qys = []
+
+     if (url.search) {
+
+        // get each query separately, leave the "?" off
+         qys = url.search.slice(1).split('&')
+     }
+
+    return qys
+}
+
+/**
+ * Update a URL with a new array of queries
+ */
+function setUrlQueries(url: URL, qys: Array<string>) {
+
+    url.search = ""
+
+    if (qys.length) {
+        // rebuild string with the filtered list
+        url.search = "?" + qys.join("&")
+    }
+}
+
+/**
+ * Delete a query (and its value) in a URL
+ *
+ * If a query appears multiple times (which is a bit odd),
+ * all instances are removed
+ *
+ * @param url           the URL to act on
+ * @param query         the query to delete
+ *
+ * @return              the modified URL
+ */
+export function deleteQuery(url: URL, matchQuery: string): URL {
+
+    let newUrl = new URL(url.href)
+
+    let qys = getUrlQueries(url)
+
+    let new_qys = qys.filter(q => {
+        return q.split("=")[0] !== matchQuery
+    })
+
+    setUrlQueries(newUrl, new_qys)
+
+    return newUrl
+}
+
+/**
+ * Replace the value of a query in a URL with a new one
+ *
+ * @param url           the URL to act on
+ * @param matchQuery    the query key to replace the value for
+ * @param newVal        the new value to use
+ */
+export function replaceQueryValue(url: URL, matchQuery: string,
+    newVal: string): URL {
+
+    let newUrl = new URL(url.href)
+
+    // get each query separately, leave the "?" off
+    let qys = getUrlQueries(url)
+
+    let new_qys = qys.map(q => {
+
+        let [key, oldVal] = q.split('=')
+
+        // found a matching query key
+        if (q.split("=")[0] === matchQuery) {
+
+            // return key=val or key as needed
+            if (newVal) {
+                return key + "=" + newVal
+            } else {
+                return key
+            }
+        }
+
+        // don't touch it
+        return q
+    })
+
+    setUrlQueries(newUrl, new_qys)
+
+    return newUrl
+}
+
+/**
+ * Graft a new path onto some parent of the current URL
+ *
+ * E.g. grafting "by-name/foobar" onto the 2nd parent path:
+ *      example.com/items/by-id/42 -> example.com/items/by-name/foobar
+ *
+ * @param url       the URL to modify
+ * @param newTail   the new "grafted" URL path tail
+ * @param level     the graft point in terms of path levels
+ *                      >= 0: start at / and count right
+ *                      <0: start at the current path and count left
+ */
+export function graftUrlPath(url: URL, newTail: string, level: number) {
+
+    let newUrl = new URL(url.href)
+
+    // path parts, ignore first /
+    let pathParts = url.pathname.split("/").splice(1)
+
+    // more levels than we can handle
+    // (remember, if level <0, we start at -1)
+    if ((level >= 0 && level > pathParts.length)
+        || (level < 0 && (-level - 1) > pathParts.length)) {
+        return null
+    }
+
+    let graftPoint = (level >= 0) ? level : (pathParts.length + level+ 1)
+
+    // lop off parts after the graft point
+    pathParts.splice(graftPoint, pathParts.length - graftPoint)
+
+    // extend part array with new parts
+    pathParts.push(...newTail.split("/"))
+
+    newUrl.pathname = pathParts.join("/")
+
+    return newUrl
+}
+
+/**
+ * Interpolates a query or other search item into a URL
+ *
+ * If the URL pattern contains "%s", the query is interpolated there. If not,
+ * it is appended to the end of the pattern.
+ *
+ * If the interpolation point is in the query string of the URL, it is
+ * percent encoded, otherwise it is is inserted verbatim.
+ *
+ * @param urlPattern        a URL to interpolate/append a query to
+ * @param query             a query to interpolate/append into the URL
+ *
+ * @return                  the URL with the query encoded (if needed) and
+ *                          inserted at the relevant point
+ */
+export function interpolateSearchItem(urlPattern: URL, query: string): URL {
+    const hasInterpolationPoint = urlPattern.href.includes("%s")
+
+    // percent-encode if theres a %s in the query string, or if we're apppending
+    // and there's a query string
+    if (hasInterpolationPoint && (urlPattern.search.includes("%s"))
+            || urlPattern.search !== "") {
+        query = encodeURIComponent(query)
+    }
+
+    // replace or append as needed
+    if (hasInterpolationPoint) {
+        return new URL(urlPattern.href.replace("%s", query))
+    } else {
+        return new URL(urlPattern.href + query)
+    }
+}
